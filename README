@@ -1,0 +1,18 @@
+
+Download Mendeley Open API Python Client
+========================================
+
+Download mendeley_client.py from following repository:
+https://github.com/Mendeley/mendeley-oapi-example
+
+Installation as Desktop Version
+===============================
+
+Download and unpack MoinMoin from here:
+http://moinmo.in/MoinMoinDownload
+
+Copy Mendeley2Moin.py and mendeley_client.py to 
+moin-1.9.X/wiki/data/plugin/action/ . Run wikiserver.py (see MoinMoin README 
+for details). Setup user account and import system pages. Click "more actions" 
+and choose "Mendeley2Moin". Follow the installation steps.
+
