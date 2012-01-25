@@ -21,7 +21,7 @@ from pprint import pformat
 from mendeley_client import MendeleyClient
 from string import Template, join
 from datetime import date
-import re, os, traceback
+import re, os, traceback, oauth2
 
 #name of page that this module uses for config, etc.
 _wiki_base = 'Mendeley2Moin'
@@ -38,7 +38,8 @@ class MendeleyImporter:
 	
 	#fetches URL for authenticating tokens
 	def get_auth_url(self):
-		return(self.mendeley.mendeley.authorize(self.mendeley.mendeley.request_token()))
+		self.mendeley.request_token = self.mendeley.mendeley.request_token()
+		return(self.mendeley.mendeley.authorize(self.mendeley.request_token))
 	
 	#loads authenticated OAuth tokens
 	def load_keys(self, api_keys_pkl_dir):
@@ -46,6 +47,13 @@ class MendeleyImporter:
 		tmp_cwd = os.getcwd()
 		os.chdir(api_keys_pkl_dir)
 		self.mendeley.load_keys()
+		os.chdir(tmp_cwd)
+	#dumps authenticated OAuth tokens to file
+	def save_keys(self, api_keys_pkl_dir):
+		#same dirty hack as before
+		tmp_cwd = os.getcwd()
+		os.chdir(api_keys_pkl_dir)
+		self.mendeley.save_keys()
 		os.chdir(tmp_cwd)
 	
 	#get dictionary with folder IDs and names
@@ -75,6 +83,13 @@ class MendeleyImporter:
 				doc_details['citation_key'] += doc_details['id']
 			list_result.append(doc_details)
 		return list_result
+	
+	# parses serialized request token and the verifier that was given by user
+	def set_verified_token(self, token_string, verifier):
+		self.mendeley.request_token = oauth2.Token.from_string(token_string)
+		self.mendeley.mendeley.authorize(self.mendeley.request_token)
+		self.mendeley.request_token.set_verifier(verifier)
+		self.mendeley.access_token = self.mendeley.mendeley.access_token(self.mendeley.request_token)
 
 #The base plugin class. Handles interaction with user and generates output pages
 class Mendeley2MoinActionHandler:
@@ -329,6 +344,23 @@ Please edit [[Mendeley2Moin/Config]] and add consumer and secret key. Then as ne
 		
 		#Create MendeleyImporter instance and try to login using consumer/secret key and the file with authenticated tokens
 		self.mendeley_importer = MendeleyImporter(self.config['consumer_key'], self.config['secret_key'])
+		#Check if the user submitted the OAuth verifier
+		if self.request.values.has_key('submitVerifier'):
+			#parse serialized token and verifier
+			try:
+				self.mendeley_importer.set_verified_token(self.request.values['token'], self.request.values['verifier'])
+			except ValueError as e:
+				self.request.theme.add_msg('Could not authenticate tokens: '+pformat(e), 'error')
+				Page(self.request, _wiki_base+'/Log').send_page()
+				return
+			#save tokens as pickled file as attachment to Config page
+			self.mendeley_importer.save_keys(AttachFile.getAttachDir(self.request, _wiki_base+'/Config'))
+			self.prepend_to_wiki_page(_wiki_base+'/Log', 'OAuth configuration completed', \
+				'Access tokens have been saved [[attachment:%s/Config/mendeley_api_keys.pkl | here]]. Click here to run the plugin: [[/|Mendeley2Moin|&action=Mendeley2Moin]]\n'+\
+				'\n(Or go to Mendeley2Moin overview page.)\n' % (_wiki_base))
+			self.request.theme.add_msg('Tokens verified.' % (wikiutil.escape(self.mendeley_importer.mendeley.request_token)), 'info')
+			Page(self.request, _wiki_base+'/Log').send_page()
+			return
 		#Try to read file with authenticated tokens. They are supposed to be an attachment of the Config page
 		attachment = u'mendeley_api_keys.pkl'
 		if not AttachFile.exists(self.request, _wiki_base+'/Config', attachment):
@@ -336,13 +368,23 @@ Please edit [[Mendeley2Moin/Config]] and add consumer and secret key. Then as ne
 			try:
 				auth_url = self.mendeley_importer.get_auth_url()
 			except Exception as e:
-				self.request.theme.add_msg('Could not request OAuth URL: "'+pformat(e), 'error')
+				self.request.theme.add_msg('Could not request OAuth URL: '+pformat(e), 'error')
 				wiki_page_base.send_page()
 				return
 			self.request.theme.add_msg('Register token on: '+auth_url, 'info')
 			try:
-				self.prepend_to_wiki_page(_wiki_base+'/Log', 'Step two: Register your OAuth token on mendeley.com', \
-					'[[%s|Click here]] to register your token on mendeley.com. Download the file and attach it here[[attachment:%s/Config/mendeley_api_keys.pkl]]' % (auth_url, _wiki_base))
+				self.prepend_to_wiki_page(_wiki_base+'/Log', 'Step two: Register your OAuth token on mendeley.com', """\
+ * If you have a backup of the file {{{mendeley_api_keys.pkl}}}, upload it here [[attachment:%s/Config/mendeley_api_keys.pkl]].
+ * Otherwise [[%s|click here]] to register your token on mendeley.com. Then enter the verification code here: 
+{{{#!html 
+<form action="submit" method="GET">
+<input type="hidden" name="action" value="Mendeley2Moin" />
+<input type="hidden" name="token" value="%s" />
+<input type="text" name="verifier" value="" size="36" />
+<input type="submit" name="submitVerifier" value="Submit" />
+</form>
+}}}
+""" % (_wiki_base, auth_url, wikiutil.escape(self.mendeley_importer.mendeley.request_token.to_string())))
 			except Exception as e:
 				self.request.theme.add_msg('Could not edit page "'+_wiki_base+'/Log": '+pformat(e), 'error')
 				Page(self.request, self.pagename).send_page()
