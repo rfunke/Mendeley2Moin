@@ -212,14 +212,8 @@ Please edit [[Mendeley2Moin/Config]] and add consumer and secret key. Then as ne
 """ % {'heading': heading, 'content': content, 'old_content': old_content }
 		return(PageEditor(self.request, page_uri).saveText(pagecontent, 0))
 	
-	#Update existing wiki page for the given document. Only lines between AUTOUPDATE markers are updated, according to the Template page.
-	def update_mendeley_doc(self, doc):
-		old_pagecontent = Page(self.request, doc['citation_key']).get_raw_body()
-		template = Page(self.request, _wiki_base+'/Template').get_raw_body()
-		re_head = re.compile('^(.*MENDELEY_AUTOUPDATE_START[^\n]+)(.*?\n)([^\n]+MENDELEY_AUTOUPDATE_END.*)$', re.MULTILINE|re.DOTALL)
-		#re_head = re.compile('^(.*MENDELEY\_AUTOUPDATE\_START)(.*)(MENDELEY\_AUTOUPDATE\_END.*)$', re.MULTILINE|re.DOTALL)
-		result_template = re_head.search(template)
-		template = result_template.group(2)
+	#given the mendeley document_details and template, it adds some key/value pairs to doc and fills in template
+	def fill_template_with_doc(self, doc, template):
 		blob = pformat(doc)
 		doc['wiki_blob'] = blob
 		doc['wiki_author_lastnames'] = join([x['surname'] for x in doc['authors']], ', ')
@@ -229,9 +223,11 @@ Please edit [[Mendeley2Moin/Config]] and add consumer and secret key. Then as ne
 		if not 'notes' in doc:
 			doc['notes'] = ''
 		if(doc['type']=='Conference Proceedings'):
-			doc['wiki_category'] = 'CategoryConference'
+			doc['wiki_category'] += 'CategoryConference '
 		elif(doc['type']=='Journal Article'):
-			doc['wiki_category'] = 'CategoryJournal'
+			doc['wiki_category'] += 'CategoryJournal '
+		for tag in doc['tags']:
+			doc['wiki_category'] += 'CategoryMendeley'+tag.title()+' '
 		re_nonlinebreak = re.compile('\\n')
 		re_linebreak = re.compile('\<m:linebreak\>\<\/m:linebreak\>')
 		re_italic = re.compile('\<([/]?)m:italic\>')
@@ -243,37 +239,28 @@ Please edit [[Mendeley2Moin/Config]] and add consumer and secret key. Then as ne
 			re_italic.sub(r'<\1i>',re_linebreak.sub('<br>',re_nonlinebreak.sub('', doc['notes'])))))))
 		#<m:bold>123</m:bold>        <i>italic</i>        <m:underline>under</m:underline>        <br>        <m:center>center                </m:center>        <m:right>
 		tmpl = Template(template)
-		new_subpart = tmpl.safe_substitute(doc)
+		return tmpl.safe_substitute(doc)
+	
+	#Update existing wiki page for the given document. Only lines between AUTOUPDATE markers are updated, according to the Template page.
+	def update_mendeley_doc(self, doc):
+		old_pagecontent = Page(self.request, doc['citation_key']).get_raw_body()
+		template = Page(self.request, _wiki_base+'/Template').get_raw_body()
+		#regular expression to get text before, between and after automarkers as three separated texts
+		re_head = re.compile('^(.*MENDELEY_AUTOUPDATE_START[^\n]+)(.*?\n)([^\n]+MENDELEY_AUTOUPDATE_END.*)$', re.MULTILINE|re.DOTALL)
+		#get text between automarkers from template page
+		result_template = re_head.search(template)
+		template = result_template.group(2)
+		#fill template page fragment with values from doc
+		new_subpart = self.fill_template_with_doc(doc, template)
+		#merge with text before and after automarkers from old page
 		result_pagecon = re_head.match(old_pagecontent)
 		new_pagecontent = result_pagecon.group(1)+new_subpart+result_pagecon.group(3)
 		return(PageEditor(self.request, doc['citation_key']).saveText(new_pagecontent, 0))
 	
 	#Create new wiki page for the given document. Page is created using the template from the Template page.
 	def import_mendeley_doc(self, doc):
-		blob = pformat(doc)
-		doc['wiki_blob'] = blob
-		doc['wiki_author_lastnames'] = join([x['surname'] for x in doc['authors']], ', ')
-		doc['wiki_mendeley_createtime'] = date.fromtimestamp(doc['added']).strftime('%Y-%m-%d')
-		doc['wiki_mendeley_modtime'] = date.fromtimestamp(doc['modified']).strftime('%Y-%m-%d')
-		doc['wiki_category'] = ''
-		if not 'notes' in doc:
-			doc['notes'] = ''
-		if(doc['type']=='Conference Proceedings'):
-			doc['wiki_category'] = 'CategoryConference'
-		elif(doc['type']=='Journal Article'):
-			doc['wiki_category'] = 'CategoryJournal'
-		re_nonlinebreak = re.compile('\\n')
-		re_linebreak = re.compile('\<m:linebreak\>\<\/m:linebreak\>')
-		re_italic = re.compile('\<([/]?)m:italic\>')
-		re_bold = re.compile('\<([/]?)m:bold\>')
-		re_underline = re.compile('\<([/]?)m:underline\>')
-		re_right = re.compile('\<([/]?)m:right\>')
-		re_center = re.compile('\<([/]?)m:center\>')
-		doc['wiki_notes'] = re_center.sub('<br>', re_right.sub('<br>', re_underline.sub(r'<\1u>', re_bold.sub(r'<\1b>', \
-			re_italic.sub(r'<\1i>',re_linebreak.sub('<br>',re_nonlinebreak.sub('', doc['notes'])))))))
-		#<m:bold>123</m:bold>        <i>italic</i>        <m:underline>under</m:underline>        <br>        <m:center>center                </m:center>        <m:right>
-		tmpl = Template(Page(self.request, _wiki_base+'/Template').get_raw_body())
-		pagecontent = tmpl.safe_substitute(doc)
+		#use Template page as template and fill in content
+		pagecontent = self.fill_template_with_doc(doc, Page(self.request, _wiki_base+'/Template').get_raw_body())
 		return(PageEditor(self.request, doc['citation_key']).saveText(pagecontent, 0))
 	
 	#downloads first attachment with .pdf extension that is found
